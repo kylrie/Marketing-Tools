@@ -1,4 +1,9 @@
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import {
+  generateKnowledgeBotReply,
+  getOrCreateBusinessKnowledge,
+} from './meta-knowledge';
+import { getActivePageContext, getConnectedPages } from './meta-pages';
 import type {
   MktCommentIntentCategory,
   MktCommentRuleRow,
@@ -10,6 +15,7 @@ const GRAPH_BASE_URL = `https://graph.facebook.com/${GRAPH_VERSION}`;
 export interface NormalizedMetaCommentEvent {
   commentId: string;
   postId: string | null;
+  pageId?: string | null;
   senderId: string;
   senderName: string;
   messageText: string;
@@ -35,6 +41,7 @@ const DEFAULT_COMMENT_RULE: MktCommentRuleRow = {
   trigger_keywords: [
     'hm',
     'how much',
+    'how',
     'price',
     'details',
     'available',
@@ -56,6 +63,7 @@ const DEFAULT_COMMENT_RULE: MktCommentRuleRow = {
 function getPageAccessToken(): string {
   const token =
     process.env.META_PAGE_ACCESS_TOKEN ||
+    process.env.META_SYSTEM_USER_TOKEN ||
     process.env.META_ACCESS_TOKEN ||
     process.env.META_SYSTEM_USER_ACCESS_TOKEN;
 
@@ -203,9 +211,10 @@ Respond with ONLY the exact label string and nothing else.`;
  */
 async function postPublicCommentReply(
   commentId: string,
-  replyMessage: string
+  replyMessage: string,
+  overrideToken?: string
 ): Promise<boolean> {
-  const token = getPageAccessToken();
+  const token = overrideToken || getPageAccessToken();
   const endpoint = `${GRAPH_BASE_URL}/${encodeURIComponent(commentId)}/comments`;
 
   const response = await fetch(endpoint, {
@@ -231,20 +240,22 @@ async function postPublicCommentReply(
 }
 
 /**
- * Sends a Private Reply DM via `POST /v21.0/${META_PAGE_ID}/messages`
+ * Sends a Private Reply DM via `POST /v21.0/${pageId}/messages`
  * using `recipient: { comment_id: commentId }`.
  */
 async function sendPrivateReplyDm(
   commentId: string,
-  dmMessage: string
+  dmMessage: string,
+  overridePageId?: string,
+  overrideToken?: string
 ): Promise<boolean> {
-  const pageId = process.env.META_PAGE_ID;
+  const pageId = overridePageId || process.env.META_PAGE_ID;
   if (!pageId) {
     console.error('[MetaComments] Missing META_PAGE_ID for Private Reply DM.');
     return false;
   }
 
-  const token = getPageAccessToken();
+  const token = overrideToken || getPageAccessToken();
   const endpoint = `${GRAPH_BASE_URL}/${encodeURIComponent(pageId)}/messages`;
 
   const response = await fetch(endpoint, {
@@ -274,8 +285,11 @@ async function sendPrivateReplyDm(
  * Hides a comment on the ad/post via `POST /v21.0/${commentId}` (`is_hidden: true`)
  * so competitors cannot poach the inquiring lead or view spam/complaints.
  */
-async function hidePublicComment(commentId: string): Promise<boolean> {
-  const token = getPageAccessToken();
+async function hidePublicComment(
+  commentId: string,
+  overrideToken?: string
+): Promise<boolean> {
+  const token = overrideToken || getPageAccessToken();
   const endpoint = `${GRAPH_BASE_URL}/${encodeURIComponent(commentId)}`;
 
   const response = await fetch(endpoint, {
@@ -363,10 +377,12 @@ export function extractIncomingCommentsFromPayload(
         : mediaObj.id
           ? String(mediaObj.id)
           : null;
+      const entryPageId = entry.id ? String(entry.id).trim() : null;
 
       results.push({
         commentId,
         postId,
+        pageId: entryPageId || (postId && postId.includes('_') ? postId.split('_')[0] : null),
         senderId,
         senderName,
         messageText,
@@ -407,9 +423,21 @@ export async function handleIncomingComment(
   const executionResults: CommentShieldExecutionResult[] = [];
 
   for (const event of events) {
+    const pageCtx = await getActivePageContext(
+      event.pageId ||
+        (event.postId && event.postId.includes('_')
+          ? event.postId.split('_')[0]
+          : null)
+    );
+    const targetPageId = pageCtx.pageId;
+    const targetPageToken = pageCtx.pageAccessToken;
+
     // 1. Ignore comments made by our own Facebook Page or IG Business Account
     if (
+      (targetPageId && event.senderId === targetPageId) ||
       (ownPageId && event.senderId === ownPageId) ||
+      (pageCtx.igBusinessAccountId &&
+        event.senderId === pageCtx.igBusinessAccountId) ||
       (ownIgId && event.senderId === ownIgId)
     ) {
       executionResults.push({
@@ -423,6 +451,18 @@ export async function handleIncomingComment(
         commentHidden: false,
         actionLogged: 'IGNORED_SELF_COMMENT',
       });
+      continue;
+    }
+
+    // 1b. Idempotency check: skip if this comment_id was already processed
+    const { data: existingLog } = await supabase
+      .from('mkt_automation_logs')
+      .select('id')
+      .eq('target_id', event.commentId)
+      .limit(1)
+      .maybeSingle<{ id: string }>();
+
+    if (existingLog) {
       continue;
     }
 
@@ -455,21 +495,57 @@ export async function handleIncomingComment(
 
       const randomTemplate =
         templates[Math.floor(Math.random() * templates.length)];
-      const publicReplyText = interpolateTemplate(randomTemplate, event.senderName);
-      const privateDmText = interpolateTemplate(
+      let publicReplyText = interpolateTemplate(randomTemplate, event.senderName);
+      let privateDmText = interpolateTemplate(
         activeRule.private_dm_template || DEFAULT_COMMENT_RULE.private_dm_template,
         event.senderName
       );
 
-      // Step 3a: Post randomized public reply to `POST /v21.0/${commentId}/comments`
-      publicReplySent = await postPublicCommentReply(event.commentId, publicReplyText);
+      // Enhance Private DM & Public Reply with Business Profile Knowledge Base if enabled
+      try {
+        const kb = await getOrCreateBusinessKnowledge(targetPageId);
+        if (kb.auto_reply_comments) {
+          const kbDm = await generateKnowledgeBotReply({
+            customerName: event.senderName,
+            customerMessage: event.messageText,
+            channel: 'COMMENT_PRIVATE_DM',
+            pageId: targetPageId,
+          });
+          if (kbDm.replyText) {
+            privateDmText = kbDm.replyText;
+          }
+          const kbPub = await generateKnowledgeBotReply({
+            customerName: event.senderName,
+            customerMessage: event.messageText,
+            channel: 'COMMENT_PUBLIC',
+            pageId: targetPageId,
+          });
+          if (kbPub.replyText) {
+            publicReplyText = kbPub.replyText;
+          }
+        }
+      } catch (kbErr) {
+        console.warn('[CommentShield] Knowledge Base fallback to template:', kbErr);
+      }
 
-      // Step 3b: Send Private Reply DM via `POST /v21.0/${META_PAGE_ID}/messages`
-      privateDmSent = await sendPrivateReplyDm(event.commentId, privateDmText);
+      // Step 3a: Post randomized public reply to `POST /v21.0/${commentId}/comments`
+      publicReplySent = await postPublicCommentReply(
+        event.commentId,
+        publicReplyText,
+        targetPageToken
+      );
+
+      // Step 3b: Send Private Reply DM via `POST /v21.0/${targetPageId}/messages`
+      privateDmSent = await sendPrivateReplyDm(
+        event.commentId,
+        privateDmText,
+        targetPageId,
+        targetPageToken
+      );
 
       // Step 3c: Optionally hide inquiry comment so competitors can't poach the lead
       if (activeRule.auto_hide_inquiry_comment) {
-        commentHidden = await hidePublicComment(event.commentId);
+        commentHidden = await hidePublicComment(event.commentId, targetPageToken);
       }
 
       actionLogged = commentHidden
@@ -480,14 +556,19 @@ export async function handleIncomingComment(
         : `AI classified as PRICE_INQUIRY: "${event.messageText}"`;
     } else if (classification === 'SPAM_OR_TROLL') {
       // Step 4: Immediately hide spam or troll comment
-      commentHidden = await hidePublicComment(event.commentId);
+      commentHidden = await hidePublicComment(event.commentId, targetPageToken);
       actionLogged = 'HIDDEN_SPAM_OR_TROLL';
       logReason = `AI Moderation detected SPAM_OR_TROLL: "${event.messageText}"`;
     } else if (classification === 'SUPPORT_COMPLAINT') {
       // Step 5: Hide complaint from public ad, send polite Private DM asking for order info, and log urgent alert
-      commentHidden = await hidePublicComment(event.commentId);
+      commentHidden = await hidePublicComment(event.commentId, targetPageToken);
       const supportDmText = `Hi ${event.senderName || 'there'}, we saw your comment and want to resolve this for you right away. Could you please reply here with your Order Number or registered phone number so our priority support team can assist you immediately? 🙏`;
-      privateDmSent = await sendPrivateReplyDm(event.commentId, supportDmText);
+      privateDmSent = await sendPrivateReplyDm(
+        event.commentId,
+        supportDmText,
+        targetPageId,
+        targetPageToken
+      );
       actionLogged = 'URGENT_SUPPORT_COMPLAINT_ESCALATED';
       logReason = `AI Moderation detected SUPPORT_COMPLAINT (hidden publicly & Private DM sent): "${event.messageText}"`;
     } else {
@@ -531,4 +612,107 @@ export async function handleIncomingComment(
 
   return executionResults;
 }
+
+/**
+ * Polls recent Facebook Page posts for any new comments not yet processed
+ * in `mkt_automation_logs` and runs them through `handleIncomingComment`.
+ * Ensures 100% reliability even when the Meta App is in Development Mode
+ * or when a webhook tunnel is temporarily offline.
+ */
+export async function syncRecentPageComments(): Promise<CommentShieldExecutionResult[]> {
+  const connectedPages = await getConnectedPages();
+  if (connectedPages.length === 0) {
+    return [];
+  }
+
+  const allResults: CommentShieldExecutionResult[] = [];
+  const cutoffMs = Date.now() - 24 * 60 * 60 * 1000; // Only process comments from the last 24 hours
+
+  for (const page of connectedPages) {
+    const pageId = page.page_id;
+    const accessToken = page.access_token || getPageAccessToken();
+    if (!pageId || !accessToken) continue;
+
+    try {
+      const endpoint = `${GRAPH_BASE_URL}/${encodeURIComponent(
+        pageId
+      )}/posts?fields=id,comments.limit(20){id,message,from,created_time,is_hidden,comments.limit(5){from}}&limit=10&access_token=${encodeURIComponent(
+        accessToken
+      )}`;
+
+      const res = await fetch(endpoint, { cache: 'no-store' });
+      if (!res.ok) continue;
+
+      const data = (await res.json()) as {
+        data?: Array<{
+          id: string;
+          comments?: {
+            data?: Array<{
+              id: string;
+              message?: string;
+              from?: { id?: string; name?: string };
+              created_time?: string;
+              is_hidden?: boolean;
+              comments?: {
+                data?: Array<{
+                  from?: { id?: string };
+                }>;
+              };
+            }>;
+          };
+        }>;
+      };
+
+      const changes: Array<Record<string, unknown>> = [];
+
+      for (const post of data.data || []) {
+        for (const comment of post.comments?.data || []) {
+          if (!comment.id || !comment.message) continue;
+          if (comment.from?.id === pageId) continue;
+          if (comment.is_hidden) continue;
+          const alreadyRepliedByPage = (comment.comments?.data || []).some(
+            (reply) => reply.from?.id === pageId
+          );
+          if (alreadyRepliedByPage) continue;
+          if (comment.created_time) {
+            const createdMs = new Date(comment.created_time).getTime();
+            if (!Number.isNaN(createdMs) && createdMs < cutoffMs) continue;
+          }
+          changes.push({
+            field: 'feed',
+            value: {
+              item: 'comment',
+              verb: 'add',
+              comment_id: comment.id,
+              post_id: post.id,
+              message: comment.message,
+              from: {
+                id: comment.from?.id || '',
+                name: comment.from?.name || 'Facebook User',
+              },
+            },
+          });
+        }
+      }
+
+      if (changes.length > 0) {
+        const resItems = await handleIncomingComment({
+          object: 'page',
+          entry: [
+            {
+              id: pageId,
+              changes,
+            },
+          ],
+        });
+        allResults.push(...resItems);
+      }
+    } catch (err) {
+      console.warn(`[CommentShield] syncRecentPageComments warning for page ${pageId}:`, err);
+    }
+  }
+
+  return allResults;
+}
+
 

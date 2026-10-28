@@ -16,12 +16,13 @@ interface MetaUpdateAdResponse {
 
 function getMarketingAccessToken(): string {
   const token =
+    process.env.META_SYSTEM_USER_TOKEN ||
     process.env.META_ACCESS_TOKEN ||
     process.env.META_SYSTEM_USER_ACCESS_TOKEN;
 
   if (!token) {
     throw new Error(
-      '[MetaActions] Missing META_ACCESS_TOKEN or META_SYSTEM_USER_ACCESS_TOKEN environment variable.'
+      '[MetaActions] Missing META_SYSTEM_USER_TOKEN or META_ACCESS_TOKEN environment variable.'
     );
   }
   return token;
@@ -51,28 +52,30 @@ export async function setAdStatus(
   const accessToken = getMarketingAccessToken();
   const supabase = getSupabaseAdmin();
 
-  const endpoint = `${GRAPH_BASE_URL}/${encodeURIComponent(adId)}`;
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({
-      status,
-      access_token: accessToken,
-    }),
-    cache: 'no-store',
-  });
+  if (!adId.startsWith('dev_ad_')) {
+    const endpoint = `${GRAPH_BASE_URL}/${encodeURIComponent(adId)}`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        status,
+        access_token: accessToken,
+      }),
+      cache: 'no-store',
+    });
 
-  const payload = (await response.json()) as MetaUpdateAdResponse;
+    const payload = (await response.json()) as MetaUpdateAdResponse;
 
-  if (!response.ok || payload.error) {
-    const errMsg = payload.error?.message || `HTTP ${response.status}`;
-    const errCode = payload.error?.code ?? response.status;
-    throw new Error(
-      `[MetaActions] Failed setting ad ${adId} to ${status} (${errCode}): ${errMsg}`
-    );
+    if (!response.ok || payload.error) {
+      const errMsg = payload.error?.message || `HTTP ${response.status}`;
+      const errCode = payload.error?.code ?? response.status;
+      throw new Error(
+        `[MetaActions] Failed setting ad ${adId} to ${status} (${errCode}): ${errMsg}`
+      );
+    }
   }
 
   const updatedAt = new Date().toISOString();

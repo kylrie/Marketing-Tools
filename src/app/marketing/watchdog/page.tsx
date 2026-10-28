@@ -55,6 +55,18 @@ export default function WatchdogAndCommentShieldPage() {
 
   // State for Tab 1: Watchdog Rules
   const [watchdogRules, setWatchdogRules] = useState<MktWatchdogRuleRow[]>([]);
+  const [showCreateRuleForm, setShowCreateRuleForm] = useState<boolean>(false);
+  const [creatingRule, setCreatingRule] = useState<boolean>(false);
+  const [newRuleName, setNewRuleName] = useState<string>('');
+  const [newRuleType, setNewRuleType] = useState<MktWatchdogRuleRow['rule_type']>(
+    'BLEEDING_SPEND_STOPLOSS'
+  );
+  const [newMinSpend, setNewMinSpend] = useState<number>(1500);
+  const [newMinDms, setNewMinDms] = useState<number>(10);
+  const [newMaxQualified, setNewMaxQualified] = useState<number>(0);
+  const [newMinRoas, setNewMinRoas] = useState<number>(2.5);
+  const [newActionToTake, setNewActionToTake] =
+    useState<MktWatchdogAction>('PAUSE_AD');
 
   // State for Tab 2: Comment-to-DM Shield
   const [commentRuleId, setCommentRuleId] = useState<string | undefined>(undefined);
@@ -280,6 +292,91 @@ export default function WatchdogAndCommentShieldPage() {
         delete next[rule.id];
         return next;
       });
+    }
+  };
+
+  /**
+   * Creates a new Watchdog Rule in `mkt_watchdog_rules`
+   */
+  const handleCreateWatchdogRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (creatingRule) return;
+    setCreatingRule(true);
+
+    try {
+      const res = await fetch('/api/marketing/watchdog', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: 'CREATE_WATCHDOG_RULE',
+          rule: {
+            rule_name: newRuleName.trim() || 'Custom Stop-Loss Rule',
+            rule_type: newRuleType,
+            is_active: true,
+            min_spend_php: newMinSpend,
+            min_dms: newMinDms,
+            max_qualified_leads: newMaxQualified,
+            min_roas: newMinRoas,
+            protect_pending_pipeline: true,
+            action_to_take: newActionToTake,
+          },
+        }),
+      });
+
+      const data = (await res.json()) as {
+        success?: boolean;
+        watchdogRule?: MktWatchdogRuleRow;
+        error?: string;
+      };
+
+      if (!res.ok || !data.watchdogRule) {
+        throw new Error(data.error || 'Failed creating rule.');
+      }
+
+      setWatchdogRules((prev) => [...prev, data.watchdogRule!]);
+      setNewRuleName('');
+      setShowCreateRuleForm(false);
+      pushToast(
+        'success',
+        'Watchdog Rule Created!',
+        `"${data.watchdogRule.rule_name}" is now active.`
+      );
+    } catch (err) {
+      pushToast(
+        'error',
+        'Failed Creating Rule',
+        err instanceof Error ? err.message : 'Unable to create rule.'
+      );
+    } finally {
+      setCreatingRule(false);
+    }
+  };
+
+  /**
+   * Deletes a Watchdog Rule from `mkt_watchdog_rules`
+   */
+  const handleDeleteWatchdogRule = async (ruleId: string, ruleName: string) => {
+    try {
+      const res = await fetch('/api/marketing/watchdog', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: 'DELETE_WATCHDOG_RULE',
+          ruleId,
+        }),
+      });
+      const data = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed deleting rule.');
+      }
+      setWatchdogRules((prev) => prev.filter((r) => r.id !== ruleId));
+      pushToast('success', 'Rule Deleted', `Removed "${ruleName}".`);
+    } catch (err) {
+      pushToast(
+        'error',
+        'Delete Failed',
+        err instanceof Error ? err.message : 'Unable to delete rule.'
+      );
     }
   };
 
@@ -642,6 +739,175 @@ export default function WatchdogAndCommentShieldPage() {
                   </div>
                 </div>
 
+                {/* Create Watchdog Rule Toolbar & Drawer */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-base font-bold text-white">
+                      Active Ad Watchdog Rules ({watchdogRules.length})
+                    </h2>
+                    <p className="text-xs text-slate-400">
+                      Automatically pauses bleeding ads or scales winners based on real CRM pipeline revenue.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateRuleForm((prev) => !prev)}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-emerald-600/20 transition cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {showCreateRuleForm ? 'Cancel' : '+ Create Watchdog Rule'}
+                  </button>
+                </div>
+
+                {showCreateRuleForm && (
+                  <form
+                    onSubmit={handleCreateWatchdogRule}
+                    className="rounded-2xl border border-emerald-500/40 bg-slate-900/90 p-5 shadow-2xl space-y-4"
+                  >
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-emerald-300 flex items-center gap-2">
+                        <Plus className="h-4 w-4" />
+                        Create New Autonomous Watchdog Rule
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => setShowCreateRuleForm(false)}
+                        className="text-slate-400 hover:text-white cursor-pointer"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-slate-400">
+                          Rule Name
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={newRuleName}
+                          onChange={(e) => setNewRuleName(e.target.value)}
+                          placeholder="e.g. Window Shopper Killer (>20 DMs, 0 Qualified)"
+                          className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-slate-400">
+                          Rule Archetype
+                        </label>
+                        <select
+                          value={newRuleType}
+                          onChange={(e) =>
+                            setNewRuleType(
+                              e.target.value as MktWatchdogRuleRow['rule_type']
+                            )
+                          }
+                          className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white"
+                        >
+                          <option value="FREEBIE_SEEKER_KILLER">
+                            FREEBIE SEEKER KILLER (High DMs, 0 Qualified)
+                          </option>
+                          <option value="BLEEDING_SPEND_STOPLOSS">
+                            BLEEDING SPEND STOP-LOSS (High Spend, 0 Won)
+                          </option>
+                          <option value="WINNER_SCALER">
+                            WINNER SCALER (High True ROAS)
+                          </option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-slate-400">
+                          Automated Action
+                        </label>
+                        <select
+                          value={newActionToTake}
+                          onChange={(e) =>
+                            setNewActionToTake(e.target.value as MktWatchdogAction)
+                          }
+                          className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white"
+                        >
+                          <option value="PAUSE_AD">Pause Ad in Meta Ads Manager</option>
+                          <option value="INCREASE_BUDGET_20_PCT">
+                            Increase AdSet Daily Budget +20%
+                          </option>
+                          <option value="ALERT_ONLY">Log Alert Only</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-slate-400">
+                          Min Spend (₱)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={100}
+                          value={newMinSpend}
+                          onChange={(e) => setNewMinSpend(Number(e.target.value))}
+                          className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-mono text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-slate-400">
+                          Min DMs Started
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={newMinDms}
+                          onChange={(e) => setNewMinDms(Number(e.target.value))}
+                          className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-mono text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-slate-400">
+                          Max Qualified Leads
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={newMaxQualified}
+                          onChange={(e) => setNewMaxQualified(Number(e.target.value))}
+                          className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-mono text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase text-slate-400">
+                          Target ROAS (x)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.1}
+                          value={newMinRoas}
+                          onChange={(e) => setNewMinRoas(Number(e.target.value))}
+                          className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-mono text-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        disabled={creatingRule}
+                        className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 text-xs font-bold text-white transition cursor-pointer"
+                      >
+                        {creatingRule ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Save className="h-4 w-4" />
+                        )}
+                        Save &amp; Activate New Rule
+                      </button>
+                    </div>
+                  </form>
+                )}
+
                 {/* Watchdog Rule Cards Grid (`Freebie Seeker Killer`, `Bleeding Spend Stop-Loss`, `Winner Scaler`) */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
                   {watchdogRules.map((rule) => {
@@ -850,20 +1116,33 @@ export default function WatchdogAndCommentShieldPage() {
                           </div>
                         </div>
 
-                        {/* Save Rule Button */}
-                        <button
-                          type="button"
-                          disabled={isSaving}
-                          onClick={() => handleSaveWatchdogRule(rule)}
-                          className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-xl bg-slate-800 hover:bg-indigo-600 disabled:opacity-60 px-4 py-2.5 text-xs font-semibold text-white transition cursor-pointer"
-                        >
-                          {isSaving ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Save className="h-4 w-4" />
-                          )}
-                          {isSaving ? 'Saving Rule...' : 'Save Rule Thresholds'}
-                        </button>
+                        {/* Save & Delete Rule Buttons */}
+                        <div className="mt-5 flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isSaving}
+                            onClick={() => handleSaveWatchdogRule(rule)}
+                            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-800 hover:bg-indigo-600 disabled:opacity-60 px-4 py-2.5 text-xs font-semibold text-white transition cursor-pointer"
+                          >
+                            {isSaving ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Save className="h-4 w-4" />
+                            )}
+                            {isSaving ? 'Saving Rule...' : 'Save Rule Thresholds'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleDeleteWatchdogRule(rule.id, rule.rule_name)
+                            }
+                            className="rounded-xl border border-slate-800 bg-slate-950 hover:border-rose-500/50 hover:bg-rose-500/15 p-2.5 text-slate-400 hover:text-rose-300 transition cursor-pointer"
+                            title="Delete rule"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
                     );
                   })}

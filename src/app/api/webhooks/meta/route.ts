@@ -8,6 +8,11 @@ import {
   type MetaWebhookPayload,
 } from '@/lib/meta-engine/meta-webhooks';
 import { handleIncomingComment } from '@/lib/meta-engine/meta-comments';
+import {
+  generateKnowledgeBotReply,
+  getOrCreateBusinessKnowledge,
+} from '@/lib/meta-engine/meta-knowledge';
+import { sendPageChatMessage } from '@/lib/meta-engine/meta-inbox-posts';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,8 +76,100 @@ export async function POST(request: NextRequest) {
       ? await handleIncomingComment(payload)
       : [];
 
+    const supabase = getSupabaseAdmin();
+    const pageId = process.env.META_PAGE_ID;
+    const platformObj =
+      String(payload.object || '').toLowerCase() === 'instagram'
+        ? 'INSTAGRAM'
+        : 'MESSENGER';
+
     // -------------------------------------------------------------------------
-    // Part B: Process Messaging Ad Referrals (`messages` & `messaging_referrals`)
+    // Part B1: Store All Incoming / Echo Chat Messages in `mkt_inbox_messages`
+    // -------------------------------------------------------------------------
+    if (Array.isArray(payload.entry)) {
+      for (const entry of payload.entry) {
+        const entryPageId = String(entry.id || pageId || '').trim();
+        for (const msgEvent of entry.messaging || []) {
+          const text = msgEvent.message?.text?.trim();
+          if (!text) continue;
+
+          const isEcho = Boolean(
+            msgEvent.message?.is_echo ||
+              (entryPageId && msgEvent.sender?.id === entryPageId) ||
+              (pageId && msgEvent.sender?.id === pageId)
+          );
+          const customerPsid = isEcho
+            ? msgEvent.recipient?.id
+            : msgEvent.sender?.id;
+
+          if (!customerPsid) continue;
+
+          const customerName = isEcho
+            ? null
+            : await fetchMetaCustomerName(customerPsid);
+
+          await supabase.from('mkt_inbox_messages').insert({
+            page_id: entryPageId || null,
+            thread_id: `t_${customerPsid}`,
+            customer_psid: customerPsid,
+            customer_name: customerName,
+            platform: platformObj,
+            direction: isEcho ? 'OUTBOUND' : 'INBOUND',
+            message_text: text,
+            message_mid: msgEvent.message?.mid || `mid_${Date.now()}`,
+            sent_at: msgEvent.timestamp
+              ? new Date(msgEvent.timestamp).toISOString()
+              : new Date().toISOString(),
+          });
+
+          // If this is an inbound customer DM and AI Auto-Reply DMs is enabled in Business Knowledge Base, auto-respond!
+          if (!isEcho) {
+            try {
+              const kb = await getOrCreateBusinessKnowledge(entryPageId);
+              if (kb.auto_reply_dms) {
+                const botReply = await generateKnowledgeBotReply({
+                  customerName: customerName || 'there',
+                  customerMessage: text,
+                  channel: 'DM',
+                  pageId: entryPageId,
+                });
+
+                if (botReply.replyText) {
+                  await sendPageChatMessage({
+                    customerPsid,
+                    customerName: customerName || undefined,
+                    platform: platformObj,
+                    messageText: botReply.replyText,
+                    threadId: `t_${customerPsid}`,
+                    pageId: entryPageId,
+                  });
+                }
+
+                if (botReply.shouldQualifyLead && kb.auto_qualify_leads) {
+                  await supabase.from('mkt_attribution_ledger').upsert(
+                    {
+                      page_id: entryPageId || null,
+                      customer_psid: customerPsid,
+                      customer_name:
+                        customerName || `Meta Lead (${customerPsid.slice(-6)})`,
+                      platform: platformObj,
+                      crm_stage: 'QUALIFIED',
+                      qualified_at: new Date().toISOString(),
+                    },
+                    { onConflict: 'customer_psid' }
+                  );
+                }
+              }
+            } catch (botErr) {
+              console.warn('[MetaWebhook] Auto-DM Bot warning:', botErr);
+            }
+          }
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Part B2: Process Messaging Ad Referrals (`messages` & `messaging_referrals`)
     // -------------------------------------------------------------------------
     const referralEvents = extractAttributableMessagingEvents(payload);
 
@@ -88,7 +185,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = getSupabaseAdmin();
     const crmWebhookUrl =
       process.env.CRM_WEBHOOK_URL || process.env.CRM_OUTBOUND_WEBHOOK_URL;
     const bridgeSecret =

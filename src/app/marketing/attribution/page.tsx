@@ -24,6 +24,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import PageSwitcherBar from '@/components/marketing/PageSwitcherBar';
 import type {
   MktAdAttributionViewRow,
   MktAdCatalogRow,
@@ -94,9 +95,26 @@ function formatNumber(num: number | null | undefined): string {
 
 export default function MarketerAttributionPage() {
   const [ads, setAds] = useState<MktAdAttributionViewRow[]>([]);
+  const [organicSummary, setOrganicSummary] = useState<{
+    organicDms: number;
+    organicQualified: number;
+    organicPendingPhp: number;
+    organicWonPhp: number;
+    organicWonCount: number;
+    commentShieldRepliesCount: number;
+  }>({
+    organicDms: 0,
+    organicQualified: 0,
+    organicPendingPhp: 0,
+    organicWonPhp: 0,
+    organicWonCount: 0,
+    commentShieldRepliesCount: 0,
+  });
   const [loading, setLoading] = useState<boolean>(true);
   const [syncingMeta, setSyncingMeta] = useState<boolean>(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [generatingShareLink, setGeneratingShareLink] = useState<boolean>(false);
+  const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
 
   // Filters & Sorting
   const [dateRange, setDateRange] = useState<DateRangeOption>('last_30d');
@@ -141,8 +159,19 @@ export default function MarketerAttributionPage() {
         if (res.ok) {
           const payload = (await res.json()) as {
             ads?: MktAdAttributionViewRow[];
+            organicSummary?: {
+              organicDms: number;
+              organicQualified: number;
+              organicPendingPhp: number;
+              organicWonPhp: number;
+              organicWonCount: number;
+              commentShieldRepliesCount: number;
+            };
             fetchedAt?: string;
           };
+          if (payload.organicSummary) {
+            setOrganicSummary(payload.organicSummary);
+          }
           if (Array.isArray(payload.ads)) {
             setAds(payload.ads);
             setLastSyncedAt(payload.fetchedAt || new Date().toISOString());
@@ -298,6 +327,53 @@ export default function MarketerAttributionPage() {
       );
     } finally {
       setSyncingMeta(false);
+    }
+  };
+
+  /**
+   * Generates a read-only Executive Report share link in `mkt_share_links`
+   */
+  const handleGenerateShareLink = async () => {
+    if (generatingShareLink) return;
+    setGeneratingShareLink(true);
+    try {
+      const res = await fetch('/api/marketing/attribution', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'CREATE_SHARE_LINK',
+        }),
+      });
+      const data = (await res.json()) as {
+        success?: boolean;
+        shareUrl?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.shareUrl) {
+        throw new Error(data.error || 'Failed generating share link.');
+      }
+
+      const fullUrl =
+        typeof window !== 'undefined'
+          ? `${window.location.origin}${data.shareUrl}`
+          : data.shareUrl;
+      setGeneratedShareUrl(fullUrl);
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(fullUrl).catch(() => {});
+      }
+      pushToast(
+        'success',
+        'Executive Share Link Ready!',
+        `Copied to clipboard: ${fullUrl}`
+      );
+    } catch (err) {
+      pushToast(
+        'error',
+        'Share Link Failed',
+        err instanceof Error ? err.message : 'Unable to generate share link.'
+      );
+    } finally {
+      setGeneratingShareLink(false);
     }
   };
 
@@ -573,6 +649,10 @@ export default function MarketerAttributionPage() {
 
             {/* Right Action Buttons */}
             <div className="flex flex-wrap items-center gap-3">
+              <PageSwitcherBar
+                onPageChanged={() => fetchAttributionData(dateRange)}
+              />
+
               {/* Date Range Segmented Pill Bar */}
               <div className="inline-flex items-center rounded-xl border border-slate-800 bg-slate-950/90 p-1">
                 <Calendar className="h-4 w-4 text-slate-400 ml-2.5 mr-1.5 hidden sm:inline" />
@@ -595,6 +675,24 @@ export default function MarketerAttributionPage() {
                 })}
               </div>
 
+              {/* Navigate to Omnichannel Inbox */}
+              <a
+                href="/marketing/inbox"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/90 hover:border-sky-500/60 hover:text-white px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-slate-200 transition-all"
+              >
+                <MessageSquare className="h-4 w-4 text-sky-400" />
+                Omnichannel Inbox
+              </a>
+
+              {/* Navigate to Organic Post Studio */}
+              <a
+                href="/marketing/posts"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/90 hover:border-violet-500/60 hover:text-white px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-slate-200 transition-all"
+              >
+                <ImageIcon className="h-4 w-4 text-violet-400" />
+                Post Studio &amp; Calendar
+              </a>
+
               {/* Navigate to 60-Second Bulk Ad Launcher Studio */}
               <a
                 href="/marketing/launcher"
@@ -612,6 +710,17 @@ export default function MarketerAttributionPage() {
                 <ShieldCheck className="h-4 w-4 text-indigo-400" />
                 Ad Watchdog &amp; Comment Shield
               </a>
+
+              {/* Generate Shareable Executive Report Link */}
+              <button
+                type="button"
+                onClick={handleGenerateShareLink}
+                disabled={generatingShareLink}
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-emerald-300 transition-all cursor-pointer"
+              >
+                <ExternalLink className="h-4 w-4" />
+                {generatingShareLink ? 'Creating Link...' : '🔗 Share Exec Report'}
+              </button>
 
               {/* Manual "Sync Meta Now" Button */}
               <button
@@ -635,7 +744,9 @@ export default function MarketerAttributionPage() {
               <div className="relative min-w-[240px] flex-1 max-w-sm">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                 <input
-                  type="text"
+                  type="search"
+                  name="attribution_ad_search"
+                  autoComplete="off"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search ad name, ID, or campaign..."
@@ -831,6 +942,84 @@ export default function MarketerAttributionPage() {
               </span>{' '}
               won ({formatPhp(summaryKpis.closedRevenuePhp, 0)})
             </p>
+          </div>
+        </section>
+
+        {/* Shareable Executive Report Link Banner (when generated) */}
+        {generatedShareUrl && (
+          <div className="rounded-2xl border border-emerald-500/40 bg-emerald-950/30 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-300">
+                🔗 Read-Only Executive Report Link Generated &amp; Copied
+              </p>
+              <p className="text-xs font-mono text-slate-200 break-all">
+                {generatedShareUrl}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={generatedShareUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 px-3.5 py-2 text-xs font-bold text-white transition"
+              >
+                Open Executive View <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
+          </div>
+        )}
+
+        {/* Organic & Comment-to-DM Attribution Summary Card (Zero Ad Spend Leads) */}
+        <section className="rounded-2xl border border-indigo-500/30 bg-gradient-to-r from-indigo-950/40 via-slate-900/90 to-slate-900/90 p-4 shadow-md">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg bg-indigo-500/20 px-2.5 py-0.5 text-[11px] font-bold text-indigo-300 ring-1 ring-indigo-500/40">
+                  🌱 Free Organic &amp; Comment-to-DM Pipeline (₱0 Ad Spend)
+                </span>
+                <span className="text-xs text-slate-400">
+                  Tracked separately so organic sales never skew your Paid Ad ROAS
+                </span>
+              </div>
+              <p className="text-xs text-slate-300">
+                Includes organic Messenger/IG threads and leads captured automatically by your AI Comment-to-DM Shield on Page posts.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3.5 py-2">
+                <span className="block text-[10px] font-semibold uppercase text-slate-400">
+                  Organic / Comment DMs
+                </span>
+                <span className="text-base font-bold text-sky-300">
+                  {formatNumber(organicSummary.organicDms)} DMs
+                </span>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3.5 py-2">
+                <span className="block text-[10px] font-semibold uppercase text-slate-400">
+                  AI Shield Auto-Replies
+                </span>
+                <span className="text-base font-bold text-indigo-300">
+                  {formatNumber(organicSummary.commentShieldRepliesCount)} Sent
+                </span>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3.5 py-2">
+                <span className="block text-[10px] font-semibold uppercase text-slate-400">
+                  Organic Pending (₱)
+                </span>
+                <span className="text-base font-bold text-amber-300">
+                  {formatPhp(organicSummary.organicPendingPhp, 0)}
+                </span>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3.5 py-2">
+                <span className="block text-[10px] font-semibold uppercase text-slate-400">
+                  Organic Closed Won
+                </span>
+                <span className="text-base font-bold text-emerald-300">
+                  {formatPhp(organicSummary.organicWonPhp, 0)} ({organicSummary.organicWonCount})
+                </span>
+              </div>
+            </div>
           </div>
         </section>
 

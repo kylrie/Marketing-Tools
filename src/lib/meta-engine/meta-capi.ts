@@ -28,13 +28,14 @@ export interface MetaCapiResponse {
 
 function getCapiAccessToken(): string {
   const token =
+    process.env.META_SYSTEM_USER_TOKEN ||
     process.env.META_ACCESS_TOKEN ||
     process.env.META_SYSTEM_USER_ACCESS_TOKEN ||
     process.env.META_PAGE_ACCESS_TOKEN;
 
   if (!token) {
     throw new Error(
-      '[MetaCAPI] Missing META_ACCESS_TOKEN, META_SYSTEM_USER_ACCESS_TOKEN, or META_PAGE_ACCESS_TOKEN.'
+      '[MetaCAPI] Missing META_SYSTEM_USER_TOKEN, META_ACCESS_TOKEN, or META_PAGE_ACCESS_TOKEN.'
     );
   }
   return token;

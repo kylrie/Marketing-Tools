@@ -66,7 +66,7 @@ interface CopyVariationCard {
 
 interface ToastItem {
   id: string;
-  type: 'success' | 'error';
+  type: 'success' | 'error' | 'info';
   title: string;
   message: string;
 }
@@ -104,7 +104,29 @@ export default function BulkAdLauncherStudioPage() {
   const [offerDescription, setOfferDescription] = useState<string>('');
   const [pricePointInput, setPricePointInput] = useState<string>('');
   const [generatingAiCopy, setGeneratingAiCopy] = useState<boolean>(false);
-  const [copyVariations, setCopyVariations] = useState<CopyVariationCard[]>([]);
+  const [copyVariations, setCopyVariations] = useState<CopyVariationCard[]>([
+    {
+      id: 'hook-1',
+      enabled: true,
+      angleLabel: 'Direct Promo Offer',
+      primaryText: '',
+      headline: '',
+    },
+    {
+      id: 'hook-2',
+      enabled: true,
+      angleLabel: 'Problem / Agitate / Solve',
+      primaryText: '',
+      headline: '',
+    },
+    {
+      id: 'hook-3',
+      enabled: true,
+      angleLabel: 'Taglish Conversational Hook',
+      primaryText: '',
+      headline: '',
+    },
+  ]);
 
   const [chatTemplates, setChatTemplates] = useState<MktChatTemplateRow[]>([]);
   const [selectedChatTemplateId, setSelectedChatTemplateId] = useState<string>('');
@@ -163,19 +185,19 @@ export default function BulkAdLauncherStudioPage() {
       setChatTemplates(loadedTemplates);
       setLaunchBatches(data.launchBatches || []);
 
-      if (loadedCampaigns.length > 0 && !selectedCampaignId) {
+      if (loadedCampaigns.length > 0) {
         const firstCampId = loadedCampaigns[0].id;
-        setSelectedCampaignId(firstCampId);
+        setSelectedCampaignId((prev) => prev || firstCampId);
         const matchingAdSet = loadedAdSets.find((a) => a.campaign_id === firstCampId);
         if (matchingAdSet) {
-          setSelectedAdSetId(matchingAdSet.id);
+          setSelectedAdSetId((prev) => prev || matchingAdSet.id);
         } else if (loadedAdSets.length > 0) {
-          setSelectedAdSetId(loadedAdSets[0].id);
+          setSelectedAdSetId((prev) => prev || loadedAdSets[0].id);
         }
       }
 
-      if (loadedTemplates.length > 0 && !selectedChatTemplateId) {
-        setSelectedChatTemplateId(loadedTemplates[0].id);
+      if (loadedTemplates.length > 0) {
+        setSelectedChatTemplateId((prev) => prev || loadedTemplates[0].id);
       }
     } catch (error) {
       pushToast(
@@ -186,11 +208,68 @@ export default function BulkAdLauncherStudioPage() {
     } finally {
       setLoadingInit(false);
     }
-  }, [pushToast, selectedCampaignId, selectedChatTemplateId]);
+  }, [pushToast]);
 
   useEffect(() => {
     loadLauncherData();
   }, [loadLauncherData]);
+
+  // Pre-fill from Social Post Studio ("Promote in Ad Launcher") if present in localStorage
+  useEffect(() => {
+    try {
+      const rawDraft = localStorage.getItem('mkt_promote_post_draft');
+      if (!rawDraft) return;
+      localStorage.removeItem('mkt_promote_post_draft');
+      const parsed = JSON.parse(rawDraft) as {
+        postId?: string;
+        message?: string;
+        mediaUrl?: string | null;
+        mediaType?: 'TEXT' | 'IMAGE' | 'VIDEO';
+      };
+
+      if (parsed.message) {
+        setOfferDescription(parsed.message);
+        setPromoName('BoostedPagePost');
+        setCopyVariations((prev) =>
+          prev.map((item, idx) =>
+            idx === 0
+              ? {
+                  ...item,
+                  enabled: true,
+                  primaryText: parsed.message || '',
+                  headline:
+                    item.headline || 'Send Message for Instant Package Quote 💬',
+                }
+              : item
+          )
+        );
+      }
+
+      if (parsed.mediaUrl) {
+        const isVid =
+          parsed.mediaType === 'VIDEO' || parsed.mediaUrl.startsWith('data:video/');
+        setCreatives([
+          {
+            localId: `promoted-post-${Date.now()}`,
+            fileName: `post_${parsed.postId || 'creative'}`,
+            type: isVid ? 'VIDEO' : 'IMAGE',
+            formatLabel: isVid ? 'Reel' : 'Static',
+            creatorName: 'PagePost',
+            previewUrl: parsed.mediaUrl,
+            fileUrlOrBase64: parsed.mediaUrl,
+          },
+        ]);
+      }
+
+      pushToast(
+        'success',
+        'Pre-Filled from Social Post Studio!',
+        'Loaded your post caption and media into the Ad Launcher.'
+      );
+    } catch {
+      // ignore malformed storage
+    }
+  }, [pushToast]);
 
   // Current Year-Month prefix (`YYYY-MM`)
   const currentYearMonth = useMemo(() => {
@@ -329,7 +408,9 @@ export default function BulkAdLauncherStudioPage() {
    * Step 3 Handler: Generate 3 Copy Hooks + 3 Headlines with Gemini (`POST /api/marketing/generate-copy`)
    */
   const handleGenerateCopyWithAi = async () => {
-    if (!offerDescription.trim() || generatingAiCopy) return;
+    if (generatingAiCopy) return;
+    const effectiveOffer =
+      offerDescription.trim() || promoName.trim() || 'Click-to-Message Promo Offer';
     setGeneratingAiCopy(true);
 
     try {
@@ -337,7 +418,7 @@ export default function BulkAdLauncherStudioPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          offerDescription,
+          offerDescription: effectiveOffer,
           pricePoint: pricePointInput,
         }),
       });
@@ -470,7 +551,12 @@ export default function BulkAdLauncherStudioPage() {
   const handlePushBatchToMeta = async () => {
     if (isPublishingBatch) return;
 
-    if (!selectedCampaignId || !selectedAdSetId) {
+    const resolvedCampaignId =
+      selectedCampaignId.trim() || campaigns[0]?.id || '';
+    const resolvedAdSetId =
+      selectedAdSetId.trim() || filteredAdSets[0]?.id || adSets[0]?.id || '';
+
+    if (!resolvedCampaignId || !resolvedAdSetId) {
       pushToast(
         'error',
         'Missing Target Campaign or Ad Set',
@@ -553,17 +639,17 @@ export default function BulkAdLauncherStudioPage() {
         `Creating ${adMatrixCombinations.length} Click-to-Message Ad Creatives & Ads in Meta Ads Manager...`
       );
 
-      const selectedCampaignObj = campaigns.find((c) => c.id === selectedCampaignId);
-      const selectedAdSetObj = adSets.find((a) => a.id === selectedAdSetId);
+      const selectedCampaignObj = campaigns.find((c) => c.id === resolvedCampaignId);
+      const selectedAdSetObj = adSets.find((a) => a.id === resolvedAdSetId);
 
       const publishRes = await fetch('/api/marketing/launcher', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'PUBLISH_BATCH',
-          campaignId: selectedCampaignId,
+          campaignId: resolvedCampaignId,
           campaignName: selectedCampaignObj?.name || undefined,
-          adsetId: selectedAdSetId,
+          adsetId: resolvedAdSetId,
           adsetName: selectedAdSetObj?.name || undefined,
           promoName,
           defaultCreatorName: creatorName,
@@ -599,9 +685,15 @@ export default function BulkAdLauncherStudioPage() {
         );
       }
 
+      const isDevSandbox = (publishData.publishedAds || []).some((a) =>
+        a.adId.startsWith('dev_ad_')
+      );
+
       setPublishProgressStep(totalSteps);
       setPublishStatusLabel(
-        `Successfully published ${publishData.publishedAds?.length ?? 0} ads and synced to mkt_ads_catalog!`
+        isDevSandbox
+          ? `Image uploaded to Meta Media Library! Saved ${publishData.publishedAds?.length ?? 0} ad(s) in Dev Sandbox Mode (switch Meta App #2230747944153516 to "Live" at developers.facebook.com so Meta allows creating live Ad Creatives).`
+          : `Successfully published ${publishData.publishedAds?.length ?? 0} ads live to Meta Ads Manager and synced to mkt_ads_catalog!`
       );
       setPublishedResults(publishData.publishedAds || []);
       if (publishData.batch) {
@@ -609,9 +701,13 @@ export default function BulkAdLauncherStudioPage() {
       }
 
       pushToast(
-        'success',
-        'Batch Pushed to Meta Ads Manager!',
-        `Created ${publishData.publishedAds?.length ?? 0} ads in ${launchStatus} status and synced to mkt_ads_catalog.`
+        isDevSandbox ? 'info' : 'success',
+        isDevSandbox
+          ? 'Saved in Dev Mode (Meta App is in Development Mode)'
+          : 'Batch Pushed Live to Meta Ads Manager!',
+        isDevSandbox
+          ? 'Your photo was uploaded to Meta Ad Account act_4493210337587688, but Meta blocked the final Ad Creative because App #2230747944153516 is still in "Development Mode". Toggle App Mode to "Live" at developers.facebook.com!'
+          : `Created ${publishData.publishedAds?.length ?? 0} ads in ${launchStatus} status and synced to mkt_ads_catalog.`
       );
     } catch (error) {
       pushToast(

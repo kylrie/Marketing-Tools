@@ -20,12 +20,13 @@ export interface WatchdogEvaluationDecision {
 
 function getMarketingAccessToken(): string {
   const token =
+    process.env.META_SYSTEM_USER_TOKEN ||
     process.env.META_ACCESS_TOKEN ||
     process.env.META_SYSTEM_USER_ACCESS_TOKEN;
 
   if (!token) {
     throw new Error(
-      '[MetaWatchdog] Missing META_ACCESS_TOKEN or META_SYSTEM_USER_ACCESS_TOKEN.'
+      '[MetaWatchdog] Missing META_SYSTEM_USER_TOKEN or META_ACCESS_TOKEN.'
     );
   }
   return token;

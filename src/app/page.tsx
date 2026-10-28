@@ -4,9 +4,10 @@ import {
   Activity,
   ArrowRight,
   BarChart3,
-  Bot,
+  MessageCircle,
   Rocket,
   ShieldCheck,
+  Sparkles,
   Target,
 } from 'lucide-react';
 
@@ -20,6 +21,24 @@ export default function HomePage() {
         'Full-funnel Click-to-Messenger & IG DM attribution table joining Meta Insights with CRM Qualified, Pending ₱, Closed Won ₱, True CPA, True ROAS, Window Shopper Trap badges, and 1-Click Live Ad Status toggles.',
       icon: Target,
       accent: 'from-indigo-500/20 to-slate-900 border-indigo-500/30 text-indigo-300',
+    },
+    {
+      href: '/marketing/inbox',
+      badge: 'Phase 4 • Live Chat & CRM',
+      title: 'Omnichannel Messenger & IG Chat Inbox',
+      description:
+        'Receive and reply to Facebook Page (Kylrie) & Instagram DM conversations in real time, attribute threads to Source Ads, update CRM pipeline stages (Qualified, Pending ₱, Won ₱), and fire Meta CAPI events.',
+      icon: MessageCircle,
+      accent: 'from-violet-500/20 to-slate-900 border-violet-500/30 text-violet-300',
+    },
+    {
+      href: '/marketing/posts',
+      badge: 'Phase 4 • Organic Studio',
+      title: 'Social Post Publisher & Page Feed Studio',
+      description:
+        'Create and publish organic Text, Photo, and Video posts to your Facebook Page & Instagram with AI caption generation, inspect live Page feed posts, and promote posts in the Ad Launcher.',
+      icon: Sparkles,
+      accent: 'from-fuchsia-500/20 to-slate-900 border-fuchsia-500/30 text-fuchsia-300',
     },
     {
       href: '/marketing/watchdog',
@@ -62,11 +81,11 @@ export default function HomePage() {
             Meta Marketing Attribution &amp; Executive BI
           </h1>
           <p className="text-sm sm:text-base text-slate-400 leading-relaxed">
-            Select a workspace module below to inspect attribution telemetry, manage 24/7 Watchdog &amp; Comment Shield rules, launch Click-to-Message ads in bulk, or view the tokenized Executive Report.
+            Select a workspace module below to inspect attribution telemetry, chat with Facebook/IG leads in the Omnichannel Inbox, publish organic Page posts, manage 24/7 Watchdog rules, or launch Click-to-Message ads in bulk.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {modules.map((mod) => {
             const IconComponent = mod.icon;
             return (
@@ -104,4 +123,3 @@ export default function HomePage() {
     </main>
   );
 }
-

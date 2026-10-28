@@ -167,6 +167,7 @@ export function extractAttributableMessagingEvents(
 export async function fetchMetaCustomerName(psid: string): Promise<string | null> {
   const token =
     process.env.META_PAGE_ACCESS_TOKEN ||
+    process.env.META_SYSTEM_USER_TOKEN ||
     process.env.META_ACCESS_TOKEN ||
     process.env.META_SYSTEM_USER_ACCESS_TOKEN;
 

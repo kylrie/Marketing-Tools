@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
 import { evaluateWatchdogRules } from '@/lib/meta-engine/meta-watchdog';
+import { syncRecentPageComments } from '@/lib/meta-engine/meta-comments';
 import type {
   MktAutomationLogRow,
   MktCommentRuleRow,
@@ -11,6 +12,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
+    await syncRecentPageComments();
     const supabase = getSupabaseAdmin();
 
     const { data: watchdogRules, error: wdError } = await supabase
@@ -68,13 +70,60 @@ export async function GET() {
 export async function PUT(request: NextRequest) {
   try {
     const body = (await request.json()) as {
-      target: 'WATCHDOG_RULE' | 'PIPELINE_PROTECTOR_ALL' | 'COMMENT_RULE';
-      rule?: Partial<MktWatchdogRuleRow> & { id: string };
+      target:
+        | 'WATCHDOG_RULE'
+        | 'CREATE_WATCHDOG_RULE'
+        | 'DELETE_WATCHDOG_RULE'
+        | 'PIPELINE_PROTECTOR_ALL'
+        | 'COMMENT_RULE';
+      rule?: Partial<MktWatchdogRuleRow> & { id?: string };
+      ruleId?: string;
       protect_pending_pipeline?: boolean;
       commentRule?: Partial<MktCommentRuleRow> & { id?: string };
     };
 
     const supabase = getSupabaseAdmin();
+
+    if (body.target === 'CREATE_WATCHDOG_RULE' && body.rule) {
+      const r = body.rule;
+      const nowIso = new Date().toISOString();
+      const { data: createdRule, error } = await supabase
+        .from('mkt_watchdog_rules')
+        .insert({
+          rule_name: r.rule_name || 'Custom Stop-Loss Rule',
+          rule_type: r.rule_type || 'BLEEDING_SPEND_STOPLOSS',
+          is_active: r.is_active ?? true,
+          min_spend_php: Number(r.min_spend_php ?? 1500),
+          min_dms: Number(r.min_dms ?? 0),
+          max_qualified_leads: Number(r.max_qualified_leads ?? 0),
+          min_roas: Number(r.min_roas ?? 1.5),
+          protect_pending_pipeline: Boolean(r.protect_pending_pipeline ?? true),
+          action_to_take: r.action_to_take || 'PAUSE_AD',
+          created_at: nowIso,
+          updated_at: nowIso,
+        })
+        .select('*')
+        .single<MktWatchdogRuleRow>();
+
+      if (error) {
+        throw new Error(`[WatchdogAPI] Failed creating rule: ${error.message}`);
+      }
+
+      return NextResponse.json({ success: true, watchdogRule: createdRule });
+    }
+
+    if (body.target === 'DELETE_WATCHDOG_RULE' && body.ruleId) {
+      const { error } = await supabase
+        .from('mkt_watchdog_rules')
+        .delete()
+        .eq('id', body.ruleId);
+
+      if (error) {
+        throw new Error(`[WatchdogAPI] Failed deleting rule: ${error.message}`);
+      }
+
+      return NextResponse.json({ success: true, deletedRuleId: body.ruleId });
+    }
 
     if (body.target === 'WATCHDOG_RULE' && body.rule?.id) {
       const { id, ...fields } = body.rule;
@@ -199,6 +248,7 @@ export async function PUT(request: NextRequest) {
 export async function POST() {
   try {
     const supabase = getSupabaseAdmin();
+    await syncRecentPageComments();
     const evaluation = await evaluateWatchdogRules();
 
     const { data: latestLogs } = await supabase

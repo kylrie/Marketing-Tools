@@ -4,6 +4,7 @@ import {
   syncDailyMetrics,
 } from '@/lib/meta-engine/meta-insights';
 import { evaluateWatchdogRules } from '@/lib/meta-engine/meta-watchdog';
+import { syncRecentPageComments } from '@/lib/meta-engine/meta-comments';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +51,7 @@ export async function GET(request: NextRequest) {
     const catalogResult = await syncAdsCatalog();
     const metricsResult = await syncDailyMetrics(datePreset);
     const watchdogResult = await evaluateWatchdogRules();
+    const commentsProcessed = await syncRecentPageComments();
 
     return NextResponse.json(
       {
@@ -58,6 +60,7 @@ export async function GET(request: NextRequest) {
         dailyMetricRowsSynced: metricsResult.syncedRows,
         datePreset: metricsResult.datePreset,
         watchdog: watchdogResult,
+        commentsProcessed: commentsProcessed.length,
         syncedAt: new Date().toISOString(),
       },
       { status: 200 }
@@ -102,6 +105,7 @@ export async function POST(request: NextRequest) {
     const watchdogResult = body.skipWatchdog
       ? null
       : await evaluateWatchdogRules();
+    const commentsProcessed = await syncRecentPageComments();
 
     return NextResponse.json(
       {
@@ -112,6 +116,7 @@ export async function POST(request: NextRequest) {
           ? `${customTimeRange.since}_to_${customTimeRange.until}`
           : metricsResult.datePreset,
         watchdog: watchdogResult,
+        commentsProcessed: commentsProcessed.length,
         syncedAt: new Date().toISOString(),
       },
       { status: 200 }

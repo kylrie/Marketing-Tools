@@ -44,8 +44,10 @@ export interface MktAttributionLedgerRow {
   crm_deal_id: string | null;
   crm_stage: MktCrmStage;
   deal_value: number;
+  capi_lead_sent?: boolean;
   capi_purchase_sent: boolean;
   first_inquiry_at: string;
+  qualified_at?: string | null;
   closed_at: string | null;
   updated_at: string;
 }
@@ -186,3 +188,58 @@ export interface MktCopyGenerationOutput {
   hooks: MktGeneratedCopyHook[];
   headlines: string[];
 }
+
+// ============================================================================
+// Phase 5 Types: Business Profile Knowledge Base & 7-Day Content Planner
+// ============================================================================
+
+export type MktToneOfVoice = 'TAGLISH' | 'ENGLISH' | 'PROFESSIONAL';
+
+export interface MktBusinessKnowledgeRow {
+  id: string;
+  page_id: string;
+  business_name: string;
+  category: string;
+  about_description: string;
+  pricing_and_packages: string;
+  faqs_and_policies: string;
+  booking_and_payment_info: string;
+  location_and_hours: string;
+  contact_info: string;
+  tone_of_voice: MktToneOfVoice;
+  auto_reply_dms: boolean;
+  auto_reply_comments: boolean;
+  auto_qualify_leads: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface MktWeeklyCalendarPostPlan {
+  dayNumber: number;
+  dayName: string;
+  theme: string;
+  recommendedTime: string;
+  headline: string;
+  caption: string;
+  promoBadge: string;
+}
+
+// ============================================================================
+// Phase 6 Types: Multi-Page Manager & Page-Scoped AI Bot Router
+// ============================================================================
+
+export interface MktConnectedPageRow {
+  id: string;
+  page_id: string;
+  page_name: string;
+  category: string;
+  access_token: string;
+  ig_business_account_id: string | null;
+  ad_account_id: string | null;
+  picture_url: string | null;
+  is_active: boolean;
+  webhook_subscribed: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+

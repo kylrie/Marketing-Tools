@@ -66,6 +66,60 @@ function getManilaDateBounds(preset: DateRangePreset): {
   };
 }
 
+export interface OrganicAttributionSummary {
+  organicDms: number;
+  organicQualified: number;
+  organicPendingPhp: number;
+  organicWonPhp: number;
+  organicWonCount: number;
+  commentShieldRepliesCount: number;
+}
+
+async function computeOrganicSummary(): Promise<OrganicAttributionSummary> {
+  const supabase = getSupabaseAdmin();
+  const [{ data: allLedger }, { data: shieldLogs }] = await Promise.all([
+    supabase
+      .from('mkt_attribution_ledger')
+      .select('source_ad_id, crm_stage, deal_value'),
+    supabase
+      .from('mkt_automation_logs')
+      .select('id, module')
+      .eq('module', 'COMMENT_SHIELD'),
+  ]);
+
+  let organicDms = 0;
+  let organicQualified = 0;
+  let organicPendingPhp = 0;
+  let organicWonPhp = 0;
+  let organicWonCount = 0;
+
+  for (const row of allLedger || []) {
+    if (row.source_ad_id) continue;
+    organicDms += 1;
+    const stage = String(row.crm_stage || 'NEW_INQUIRY');
+    const val = Number(row.deal_value ?? 0);
+    if (stage === 'QUALIFIED' || stage === 'PENDING' || stage === 'WON') {
+      organicQualified += 1;
+    }
+    if (stage === 'PENDING') {
+      organicPendingPhp += val;
+    }
+    if (stage === 'WON') {
+      organicWonCount += 1;
+      organicWonPhp += val;
+    }
+  }
+
+  return {
+    organicDms,
+    organicQualified,
+    organicPendingPhp: Number(organicPendingPhp.toFixed(2)),
+    organicWonPhp: Number(organicWonPhp.toFixed(2)),
+    organicWonCount,
+    commentShieldRepliesCount: (shieldLogs || []).length,
+  };
+}
+
 /**
  * GET /api/marketing/attribution?range=last_7d
  * Queries `v_mkt_ad_attribution` joined with `mkt_ads_catalog` for `all_time`,
@@ -76,6 +130,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const range = (searchParams.get('range') || 'last_30d') as DateRangePreset;
     const supabase = getSupabaseAdmin();
+    const organicSummary = await computeOrganicSummary();
 
     if (range === 'all_time') {
       const [{ data: viewRows, error: viewError }, { data: catalogRows, error: catError }] =
@@ -171,6 +226,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         range,
         ads: mergedRows,
+        organicSummary,
         fetchedAt: new Date().toISOString(),
       });
     }
@@ -367,6 +423,7 @@ export async function GET(request: NextRequest) {
       startDate,
       endDate,
       ads,
+      organicSummary,
       fetchedAt: new Date().toISOString(),
     });
   } catch (error) {
@@ -377,6 +434,59 @@ export async function GET(request: NextRequest) {
           error instanceof Error
             ? error.message
             : 'Failed loading Meta attribution data.',
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * POST /api/marketing/attribution
+ * Generates a read-only Executive Report share link in `mkt_share_links`.
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const body = (await request.json().catch(() => ({}))) as {
+      action?: 'CREATE_SHARE_LINK';
+      label?: string;
+    };
+
+    const supabase = getSupabaseAdmin();
+    const token = `exec-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const label =
+      body.label?.trim() ||
+      `Executive Marketing & Revenue Report (${new Date().toLocaleDateString('en-PH')})`;
+
+    const { error } = await supabase.from('mkt_share_links').insert({
+      token,
+      label,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      expires_at: null,
+    });
+
+    if (error) {
+      throw new Error(
+        `[AttributionAPI] Failed creating share link: ${error.message}`
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      token,
+      label,
+      shareUrl: `/exec-report/${token}`,
+    });
+  } catch (error) {
+    console.error('[AttributionAPI] POST share link error:', error);
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Failed generating executive share link.',
       },
       { status: 500 }
     );

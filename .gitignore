@@ -25,6 +25,8 @@ yarn-error.log*
 .env
 .env*.local
 !.env.example
+.local-mkt-db.json
 
 # Vercel
 .vercel
+
